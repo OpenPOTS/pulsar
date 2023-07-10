@@ -27,13 +27,15 @@
 #define RM 0 // Ring mode on HIGH
 #define FR 1 // Reverse A and B (Tip and Ring pins on Ag1171) output polarities on LOW
 #define SHK 2 // Indicates off-hook condition when HIGH
+#define CMD_BUFF_SIZE 30 // Command buffer size
+#define CMD_MAX_PARAMS 5 // Maximum number of parameters in a command
+#define NO_DATA -1
 
 /* --- TEST CODE --- */
-#define RING_MODE_SWITCH 3 // Set US or UK ring based on pin
-#define UK_RING LOW
-#define US_RING HIGH
-#define DEBUG 4 // Debug pin
+#define DEBUG 0 // Debug pin
 /* --- TEST CODE --- */
+
+#include <DigiCDC.h>
 
 typedef struct Cadence {
   byte freq;
@@ -70,6 +72,11 @@ struct LineState {
   bool ringing;
 } lineState = {false, false};
 
+struct CommandState {
+  char buffer[CMD_BUFF_SIZE + 1]; // One extra byte for null terminator
+  byte index;
+} commandState;
+
 ISR(TIMER0_COMPB_vect) {
   ringSignalState.updateNeeded = true;
 }
@@ -78,12 +85,12 @@ ISR(TIMER0_COMPB_vect) {
 void debugFlash(int val) {
   bool oldVal = digitalRead(DEBUG);
   digitalWrite(DEBUG, LOW);
-  delay(5);
+  SerialUSB.delay(5);
   for(int i = 0; i < val; i++) {
     digitalWrite(DEBUG, HIGH);
-    delay(5);
+    SerialUSB.delay(5);
     digitalWrite(DEBUG, LOW);
-    delay(5);
+    SerialUSB.delay(5);
   }
   digitalWrite(DEBUG, oldVal);
 }
@@ -128,6 +135,9 @@ void initialiseTimer0() {
 }
 
 void setup() {
+  SerialUSB.begin();
+  resetCommandBuffer();
+
   // Setup pin I/O
   pinMode(RM, OUTPUT); 
   pinMode(FR, OUTPUT);
@@ -138,11 +148,6 @@ void setup() {
   digitalWrite(FR, HIGH);
 
   initialiseTimer0();
-
-  /* --- TEST CODE --- */
-  pinMode(RING_MODE_SWITCH, INPUT);
-  pinMode(DEBUG, OUTPUT);
-  /* --- TEST CODE --- */
 }
 
 void setupRingSignal(byte freq) {
@@ -179,11 +184,14 @@ void stopRingSignal() {
 
   // Wait for Timer0 to switch FR permanently HIGH then turn off ringing mode
   while(ringSignalState.ringSignalRunning == true) {
+    // Keep USB alive
+    SerialUSB.refresh();
+    // Process timer state
     updateRingSignal();
   }
 
   // Ag1171 needs a delay of > 10 ms between FR permanently HIGH and RM LOW
-  delay(11);
+  SerialUSB.delay(11);
   digitalWrite(RM, LOW);
 }
 
@@ -289,21 +297,135 @@ void updateLine() {
   }
 }
 
+void ringCommand() {
+  if(lineState.ringing == false && lineState.offHook == false) {
+    startRinging(&ukRing);
+  }
+}
+
+void stopCommand() {
+  if(lineState.ringing == true) {
+    stopRinging();
+  }
+}
+
+void resetCommandBuffer() {
+  for(byte i = 0; i < CMD_BUFF_SIZE; i++) {
+    commandState.buffer[i] = 0;
+  }
+  commandState.index = 0;
+  SerialUSB.flush();
+}
+
+void executeCommand(char command, byte nParams, int params[]) {
+
+}
+
+void parseCommand() {
+  // Parse command
+  char command = commandState.buffer[0];
+  byte paramIndices[CMD_MAX_PARAMS] = {0};
+  byte paramLengths[CMD_MAX_PARAMS] = {0};
+
+  // Parse parameters
+  byte param = 0;
+  paramIndices[0] = 1;
+  for(int i = 1; i < commandState.index; i++) {
+    // All params parsed, we can stop now
+    if(param >= CMD_MAX_PARAMS) {
+      break;
+    }
+    // If previous character was a delimiter, this character is the start of
+    // the next parameter
+    else if(commandState.buffer[i - 1] == ',') {
+      paramIndices[param] = i;
+    }
+    
+    // Delimiter found! 
+    if(commandState.buffer[i] == ','){
+      paramLengths[param] = i - paramIndices[param];
+      param++;
+    }
+    // Treat the end of the command buffer like a delimiter
+    else if(i == commandState.index - 1) {
+      paramLengths[param] = (i + 1) - paramIndices[param];
+      break;
+    }
+  }
+
+  // Get number of parameters
+  byte nParams = 0;
+  for(byte i = 0; i < CMD_MAX_PARAMS; i++) {
+    if(paramLengths[i] == 0) {
+      break;
+    }
+    nParams++;
+  }
+
+  /* --- TEST CODE --- */
+  SerialUSB.print(F("Command: "));
+  SerialUSB.println(command);
+  SerialUSB.print(F("nParams: "));
+  SerialUSB.println(int(nParams));
+  SerialUSB.println(F("Params: "));
+  for(byte i = 0; i < nParams; i++) {
+    SerialUSB.print(F("  "));
+    SerialUSB.print(int(i));
+    SerialUSB.print(F(": "));
+    for(byte j = 0; j < paramLengths[i]; j++) {
+      SerialUSB.print(commandState.buffer[paramIndices[i] + j]);
+    }
+    SerialUSB.println();
+  }
+  /* --- TEST CODE --- */
+
+  /*// Numericise parameters
+  int params[nParams] = {0};
+  char paramBuffer[CMD_BUFF_SIZE - 1];
+  for(byte i = 0; i < nParams; i++) {
+
+  }
+
+  // Ready to execute command
+  executeCommand(command, nParams, params);*/
+}
+
+void updateCommand() {
+  // Read and echo
+  char nextChar = SerialUSB.read();
+  SerialUSB.write(nextChar);
+
+  // Nothing to be read, so nothing to be done
+  if(nextChar == NO_DATA) {
+    return;
+  }
+  // Parse line as command
+  else if(nextChar == '\n') {
+    if(commandState.index == 0) {
+      return;
+    }
+    else {
+      parseCommand();
+      resetCommandBuffer();
+    }
+  }
+  // Command is too long
+  else if(commandState.index >= CMD_BUFF_SIZE){
+    resetCommandBuffer();
+    SerialUSB.println(F("\nERROR: Command too long!"));
+  }
+  // Character is part of command
+  else {
+    commandState.buffer[commandState.index] = nextChar;
+    commandState.index++;
+  }
+}
+
 void loop() {
+  if(SerialUSB.available()) {
+    updateCommand();
+  }
   updateLine();
   updateRingSignal();
   updateCadence();
-
-  /* --- TEST CODE --- */
-  if(lineState.ringing == false && lineState.offHook == false) {
-    delay(1000);
-    bool ringMode = digitalRead(RING_MODE_SWITCH);
-    if(ringMode == UK_RING) {
-      startRinging(&ukRing);
-    }
-    else {
-      startRinging(&usRing);
-    }
-  }
-  /* --- TEST CODE --- */
 }
