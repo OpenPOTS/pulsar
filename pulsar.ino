@@ -384,8 +384,8 @@ unsigned int numericise(char *base, byte length) {
   for(byte i = 0; i < length; i++) {
     // 16-bit ints have maximum 5 characters
     if(i >= 5 || !(base[i] >= 48 && base[i] <= 57)) {
-      //SerialUSB.print("ERROR: Invalid parameter");
-      return 0;
+      SerialUSB.print("ERROR: Invalid parameter");
+      return -1;
     }
     multiplier = 1;
     for(byte k = 0; k < length - 1 - i; k++) {
@@ -409,6 +409,9 @@ void parseCommand() {
     // Delimiter found!
     if(commandState.buffer[i] == ',' || atEnd) {
       params[param] = numericise(&commandState.buffer[paramStart], i - paramStart + (atEnd ? 1 : 0));
+      if(params[param] == -1) {
+        return;
+      }
       paramStart = i + 1;
       // Max number of params parsed, we can stop now
       if(param >= CMD_MAX_PARAMS - 1) {
@@ -462,7 +465,7 @@ void updateCommand() {
   // Command is too long
   else if(commandState.index >= CMD_BUFF_SIZE){
     resetCommandBuffer();
-    //SerialUSB.println("\nERROR: Command too long!");
+    SerialUSB.print("\nERROR: too long\n");
   }
   // Character is part of command
   else {
