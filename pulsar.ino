@@ -71,6 +71,20 @@ ISR(TIMER0_COMPB_vect) {
   }
 }
 
+void debugFlash(int val) {
+  bool oldVal = digitalRead(DEBUG);
+  digitalWrite(DEBUG, LOW);
+  delay(1000);
+  for(int i = 0; i < val; i++) {
+    digitalWrite(DEBUG, HIGH);
+    delay(10);
+    digitalWrite(DEBUG, LOW);
+    delay(10);
+  }
+  delay(1000);
+  digitalWrite(DEBUG, oldVal);
+}
+
 void startTimer0() {
   GTCCR &= ~T0_STOP;
 }
@@ -117,22 +131,6 @@ void setup() {
   // Initialise Ag1171
   digitalWrite(RM, LOW);
   digitalWrite(FR, HIGH);
-
-  startRinging(40);
-}
-
-void debugFlash(int val) {
-  bool oldVal = digitalRead(DEBUG);
-  digitalWrite(DEBUG, LOW);
-  delay(1000);
-  for(int i = 0; i < val; i++) {
-    digitalWrite(DEBUG, HIGH);
-    delay(10);
-    digitalWrite(DEBUG, LOW);
-    delay(10);
-  }
-  delay(1000);
-  digitalWrite(DEBUG, oldVal);
 }
 
 void setupRingSignal(byte freq) {
@@ -163,13 +161,17 @@ void startRingSignal() {
 }
 
 void stopRingSignal() {
+  bool noop = 0;
+
   // Tell Timer0 ISR to stop ringing signal at the end of current cycle
   generateRingSignal = false;
 
   // Wait for Timer0 to switch FR permanently HIGH then turn off ringing mode
-  while(ringSignalRunning == true) {
-    // no-op
-    (void)0;
+  while(true) {
+    // workaround for compiler incorrectly removing no-op loop
+    if(ringSignalRunning == true){
+      break;
+    }
   }
 
   // Ag1171 needs a delay of > 10 ms between FR permanently HIGH and RM LOW
@@ -177,7 +179,7 @@ void stopRingSignal() {
   digitalWrite(RM, LOW);
 }
 
-void startRinging(byte freq) {
+void startRinging(int freq) {
   setupRingSignal(freq);
   startRingSignal();
 }
@@ -192,8 +194,20 @@ void advanceCadence() {
 }
 
 void loop() {
-  /*delay(500);
-  stopRingSignal();
+  startRinging(25);
+  for(int i = 0; i < 4; i++) {
+    delay(500);
+    stopRingSignal();
+    delay(500);
+    startRingSignal();
+  }
+  stopRinging();
   delay(500);
-  startRingSignal();*/
+  startRinging(5);
+  for(int i = 0; i < 4; i++) {
+    delay(500);
+    stopRingSignal();
+    delay(500);
+    startRingSignal();
+  }
 }
