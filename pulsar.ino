@@ -15,6 +15,8 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include <DigiCDC.h>
+
 #define F_CPU 16500000UL // CPU frequency
 #define T0_CTC_MODE (1 << WGM01)
 #define T0_PRESCALER  1024
@@ -35,18 +37,19 @@
 #define DEBUG 0 // Debug pin
 /* --- TEST CODE --- */
 
-#include <DigiCDC.h>
-
 typedef struct Cadence {
-  byte freq;
-  byte numRings;
-  int onTime;
-  int offTime;
-  int pauseTime;
+  unsigned int freq;
+  unsigned int numRings;
+  unsigned int onTime;
+  unsigned int offTime;
+  unsigned int pauseTime;
 } Cadence;
 
-Cadence ukRing = {25, 2, 400, 200, 2000};
-Cadence usRing = {20, 1, 2000, 0, 4000};
+Cadence ringCadence = {0, 0, 0, 0, 0};
+/* --- TEST CODE --- */
+/*Cadence ukRing = {25, 2, 400, 200, 2000};
+Cadence usRing = {20, 1, 2000, 0, 4000};*/
+/* --- TEST CODE --- */
 
 struct RingSignalState {
   byte postscalerCounter;
@@ -63,9 +66,8 @@ struct CadenceState {
   byte offEdges;
   byte pauseEdges;
   byte edgesRemaining;
-  int totalSteps;
-  int currentStep;
-} cadenceState = {0, 0, 0, 0, 255, 0, 0};
+  unsigned int currentStep;
+} cadenceState = {0, 0, 0, 0, 255, 0};
 
 struct LineState {
   bool offHook;
@@ -82,11 +84,11 @@ ISR(TIMER0_COMPB_vect) {
 }
 
 /* --- TEST CODE --- */
-void debugFlash(int val) {
+void debugFlash(unsigned int val) {
   bool oldVal = digitalRead(DEBUG);
   digitalWrite(DEBUG, LOW);
   SerialUSB.delay(5);
-  for(int i = 0; i < val; i++) {
+  for(unsigned int i = 0; i < val; i++) {
     digitalWrite(DEBUG, HIGH);
     SerialUSB.delay(5);
     digitalWrite(DEBUG, LOW);
@@ -135,6 +137,7 @@ void initialiseTimer0() {
 }
 
 void setup() {
+  // Initialise USB serial interface
   SerialUSB.begin();
   resetCommandBuffer();
 
@@ -148,9 +151,13 @@ void setup() {
   digitalWrite(FR, HIGH);
 
   initialiseTimer0();
+
+  /* --- TEST CODE --- */
+  //startRinging(&ukRing);
+  /* --- TEST CODE --- */
 }
 
-void setupRingSignal(byte freq) {
+/*void setupRingSignal(byte freq) {
   initialiseTimer0();
   // We need to generate an edge twice every period of the signal
   float edgeFreq = freq * 2;
@@ -165,7 +172,7 @@ void setupRingSignal(byte freq) {
     OCR0A = ringSignalState.prescalerTicks - 1;
     OCR0B = OCR0A;
   }
-}
+}*/
 
 void startRingSignal() {
   // Tell Timer0 ISR it's okay to generate a signal
@@ -242,22 +249,21 @@ void updateRingSignal() {
   }
 }
 
-void setupCadence(Cadence *cadence) {
+/*void setupCadence(Cadence *cadence) {
   cadenceState.numRings = cadence->numRings;
-  int edgeTime = 1000 / (cadence->freq * 2);
+  unsigned int edgeTime = 1000 / (cadence->freq * 2);
   cadenceState.onEdges = cadence->onTime / edgeTime;
   cadenceState.offEdges = cadence->offTime / edgeTime;
   cadenceState.pauseEdges = cadence->pauseTime / edgeTime;
   cadenceState.edgesRemaining = cadenceState.onEdges;
-  cadenceState.totalSteps = 2 * cadence->numRings;
   cadenceState.currentStep = 0;
-}
+}*/
 
 void updateCadence() {
   // Do nothing until end of current cadence step
   if(cadenceState.edgesRemaining == 0) {
     // Next step is last step ("Pause")
-    if(cadenceState.currentStep == cadenceState.totalSteps - 2) {
+    if(cadenceState.currentStep == (cadenceState.numRings * 2) - 2) {
       stopRingSignal();
       cadenceState.edgesRemaining = cadenceState.pauseEdges;
     }
@@ -272,14 +278,37 @@ void updateCadence() {
       cadenceState.edgesRemaining = cadenceState.onEdges;
     }
 
-    cadenceState.currentStep = (cadenceState.currentStep + 1) % cadenceState.totalSteps;
+    cadenceState.currentStep = (cadenceState.currentStep + 1) % (cadenceState.numRings * 2);
   }
 }
 
 void startRinging(Cadence *cadence) {
-  setupRingSignal(cadence->freq);
-  setupCadence(cadence);
+  initialiseTimer0();
+  // We need to generate an edge twice every period of the signal
+  float edgeFreq = cadence->freq * 2;
+  float targetTicks = T0_POSTSCALED_F / edgeFreq;
+  // Truncate target ticks to get quotient
+  ringSignalState.postscalerTicks = byte(targetTicks);
+  // Use remainder to get number of prescaler ticks
+  ringSignalState.prescalerTicks = byte((targetTicks - ringSignalState.postscalerTicks) * T0_POSTSCALER);
+
+  // Special case for 0 postscaler ticks, as we start off on prescaler ticks
+  if(ringSignalState.postscalerTicks == 0) {
+    OCR0A = ringSignalState.prescalerTicks - 1;
+    OCR0B = OCR0A;
+  }
+
+  // Setup cadence
+  cadenceState.numRings = cadence->numRings;
+  unsigned int edgeTime = 1000 / (cadence->freq * 2);
+  cadenceState.onEdges = cadence->onTime / edgeTime;
+  cadenceState.offEdges = cadence->offTime / edgeTime;
+  cadenceState.pauseEdges = cadence->pauseTime / edgeTime;
+  cadenceState.edgesRemaining = cadenceState.onEdges;
+  cadenceState.currentStep = 0;
   lineState.ringing = true;
+
+  // Go!
   startRingSignal();
 }
 
@@ -297,9 +326,14 @@ void updateLine() {
   }
 }
 
-void ringCommand() {
+/*void ringCommand(byte freq, byte numRings, unsigned int onTime, unsigned int offTime, unsigned int pauseTime) {
+  ringCadence.freq = freq;
+  ringCadence.numRings = numRings;
+  ringCadence.onTime = onTime;
+  ringCadence.offTime = offTime;
+  ringCadence.pauseTime = pauseTime;
   if(lineState.ringing == false && lineState.offHook == false) {
-    startRinging(&ukRing);
+    startRinging(&ringCadence);
   }
 }
 
@@ -307,7 +341,7 @@ void stopCommand() {
   if(lineState.ringing == true) {
     stopRinging();
   }
-}
+}*/
 
 void resetCommandBuffer() {
   for(byte i = 0; i < CMD_BUFF_SIZE; i++) {
@@ -317,77 +351,93 @@ void resetCommandBuffer() {
   SerialUSB.flush();
 }
 
-void executeCommand(char command, byte nParams, int params[]) {
+void executeCommand(char command, byte nParams, unsigned int params[]) {
+  switch(command) {
+    case 'r':
+      if(nParams < 5) {
+        return;
+      }
+      ringCadence = *(Cadence*)params;
+      if(lineState.offHook == false) {
+        startRinging(&ringCadence);
+      }
+      break;
+    case 's':
+      if(lineState.ringing == true) {
+        stopRinging();
+      }
+      break;
+    case 'l':
+      SerialUSB.write(lineState.ringing + 48);
+      SerialUSB.write(lineState.offHook + 48);
+      SerialUSB.write('\n');
+      break;
+    default:
+      break;
+  }
+}
 
+unsigned int numericise(char *base, byte length) {
+  unsigned int multiplier;
+  unsigned int number = 0;
+
+  for(byte i = 0; i < length; i++) {
+    // 16-bit ints have maximum 5 characters
+    if(i >= 5 || !(base[i] >= 48 && base[i] <= 57)) {
+      //SerialUSB.print("ERROR: Invalid parameter");
+      return 0;
+    }
+    multiplier = 1;
+    for(byte k = 0; k < length - 1 - i; k++) {
+      multiplier *= 10;
+    }
+    number += (base[i] - 48) * multiplier;
+  }
+  return number;
 }
 
 void parseCommand() {
   // Parse command
   char command = commandState.buffer[0];
-  byte paramIndices[CMD_MAX_PARAMS] = {0};
-  byte paramLengths[CMD_MAX_PARAMS] = {0};
+  unsigned int params[CMD_MAX_PARAMS] = {0};
 
   // Parse parameters
   byte param = 0;
-  paramIndices[0] = 1;
-  for(int i = 1; i < commandState.index; i++) {
-    // All params parsed, we can stop now
-    if(param >= CMD_MAX_PARAMS) {
-      break;
+  byte paramStart = 1;
+  for(byte i = paramStart; i < commandState.index; i++) {
+    bool atEnd = i == commandState.index - 1;
+    // Delimiter found!
+    if(commandState.buffer[i] == ',' || atEnd) {
+      params[param] = numericise(&commandState.buffer[paramStart], i - paramStart + (atEnd ? 1 : 0));
+      paramStart = i + 1;
+      // Max number of params parsed, we can stop now
+      if(param >= CMD_MAX_PARAMS - 1) {
+        break;
+      }
+      if(!atEnd) {
+        param++;
+      }
     }
-    // If previous character was a delimiter, this character is the start of
-    // the next parameter
-    else if(commandState.buffer[i - 1] == ',') {
-      paramIndices[param] = i;
-    }
-    
-    // Delimiter found! 
-    if(commandState.buffer[i] == ','){
-      paramLengths[param] = i - paramIndices[param];
-      param++;
-    }
-    // Treat the end of the command buffer like a delimiter
-    else if(i == commandState.index - 1) {
-      paramLengths[param] = (i + 1) - paramIndices[param];
-      break;
-    }
-  }
-
-  // Get number of parameters
-  byte nParams = 0;
-  for(byte i = 0; i < CMD_MAX_PARAMS; i++) {
-    if(paramLengths[i] == 0) {
-      break;
-    }
-    nParams++;
   }
 
   /* --- TEST CODE --- */
-  SerialUSB.print(F("Command: "));
+  /*SerialUSB.print("Command: ");
   SerialUSB.println(command);
-  SerialUSB.print(F("nParams: "));
-  SerialUSB.println(int(nParams));
-  SerialUSB.println(F("Params: "));
-  for(byte i = 0; i < nParams; i++) {
-    SerialUSB.print(F("  "));
+  SerialUSB.print("nParams: ");
+  SerialUSB.println(param + 1);
+  SerialUSB.println("Params: ");
+  for(byte i = 0; i < param + 1; i++) {
+    SerialUSB.print("  ");
     SerialUSB.print(int(i));
-    SerialUSB.print(F(": "));
-    for(byte j = 0; j < paramLengths[i]; j++) {
-      SerialUSB.print(commandState.buffer[paramIndices[i] + j]);
-    }
+    SerialUSB.print(": ");
+    SerialUSB.print(params[i]);
     SerialUSB.println();
-  }
+  }*/
   /* --- TEST CODE --- */
-
-  /*// Numericise parameters
-  int params[nParams] = {0};
-  char paramBuffer[CMD_BUFF_SIZE - 1];
-  for(byte i = 0; i < nParams; i++) {
-
-  }
 
   // Ready to execute command
-  executeCommand(command, nParams, params);*/
+  executeCommand(command, param + 1, params);
+
 }
 
 void updateCommand() {
@@ -398,21 +448,21 @@ void updateCommand() {
   // Nothing to be read, so nothing to be done
   if(nextChar == NO_DATA) {
     return;
-  }
+  }  
   // Parse line as command
   else if(nextChar == '\n') {
-    if(commandState.index == 0) {
+    /*if(commandState.index == 0) {
       return;
     }
-    else {
+    else {*/
       parseCommand();
       resetCommandBuffer();
-    }
+    //}
   }
   // Command is too long
   else if(commandState.index >= CMD_BUFF_SIZE){
     resetCommandBuffer();
-    SerialUSB.println(F("\nERROR: Command too long!"));
+    //SerialUSB.println("\nERROR: Command too long!");
   }
   // Character is part of command
   else {
@@ -422,10 +472,39 @@ void updateCommand() {
 }
 
 void loop() {
+  // Update command
   if(SerialUSB.available()) {
     updateCommand();
   }
-  updateLine();
+  
+  // Update line
+  lineState.offHook = digitalRead(SHK);
+  if(lineState.ringing == true && lineState.offHook == true) {
+    stopRinging();
+  }
+
+  // Update ring signal
   updateRingSignal();
-  updateCadence();
+
+  // Update cadence
+  // Do nothing until end of current cadence step
+  if(cadenceState.edgesRemaining == 0) {
+    // Next step is last step ("Pause")
+    if(cadenceState.currentStep == (cadenceState.numRings * 2) - 2) {
+      stopRingSignal();
+      cadenceState.edgesRemaining = cadenceState.pauseEdges;
+    }
+    // Next step is "Off" step
+    else if(cadenceState.currentStep % 2 == 0) {
+      stopRingSignal();
+      cadenceState.edgesRemaining = cadenceState.offEdges;
+    }
+    // Next step is "On" step
+    else if(cadenceState.currentStep % 2 == 1) {
+      startRingSignal();
+      cadenceState.edgesRemaining = cadenceState.onEdges;
+    }
+
+    cadenceState.currentStep = (cadenceState.currentStep + 1) % (cadenceState.numRings * 2);
+  }
 }
