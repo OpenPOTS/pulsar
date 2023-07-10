@@ -373,6 +373,7 @@ void executeCommand(char command, byte nParams, unsigned int params[]) {
       SerialUSB.write('\n');
       break;
     default:
+      SerialUSB.print("Bad cmd\n");
       break;
   }
 }
@@ -384,7 +385,7 @@ unsigned int numericise(char *base, byte length) {
   for(byte i = 0; i < length; i++) {
     // 16-bit ints have maximum 5 characters
     if(i >= 5 || !(base[i] >= 48 && base[i] <= 57)) {
-      SerialUSB.print("ERROR: Invalid parameter");
+      SerialUSB.print("Bad param\n");
       return -1;
     }
     multiplier = 1;
@@ -465,7 +466,7 @@ void updateCommand() {
   // Command is too long
   else if(commandState.index >= CMD_BUFF_SIZE){
     resetCommandBuffer();
-    SerialUSB.print("\nERROR: too long\n");
+    SerialUSB.print("\nToo long\n");
   }
   // Character is part of command
   else {
